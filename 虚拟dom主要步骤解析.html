@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>virtual DOM算法实现</title>
+</head>
+
+<body>
+    <h3>
+
+    </h3>
+</body>
+<script>
+    // 步骤一：用JS对象模拟DOM树 element.js
+
+    //（记录它的节点类型，属性，还有子节点）除了这三个参数会保存这对象之外，还保存了key和count
+    function Element(tagName, props, children) {
+        if (!(this instanceof Element)) {
+            return new Element(tagName, props, children);
+        }
+
+        this.tagName = tagName;
+        this.props = props || {};
+        this.children = children || [];
+        this.key = props ? props.key : undefined;
+
+        let count = 0;
+        this.children.forEach((child) => {
+            if (child instanceof Element) {
+                count += child.count;
+            }
+            count++;
+        });
+        this.count = count;
+    }
+
+    //构建真正的dom结构
+    Element.prototype.render = function () {
+        var el = document.createElement(this.tagName) // render方法会根据tagName构建一个真正的DOM节点
+        var props = this.props
+        //设置标签的属性
+        for (var propName in props) { // 设置节点的DOM属性
+            var propValue = props[propName]
+            el.setAttribute(propName, propValue)
+        }
+
+        var children = this.children || []
+        //依次创建子节点的标签
+        children.forEach(function (child) {
+            var childEl = (child instanceof Element)
+                ? child.render() // 如果子节点也是虚拟DOM，递归构建DOM节点
+                : document.createTextNode(child) // 如果字符串，只构建文本节点
+            el.appendChild(childEl)
+        })
+
+        return el
+    }
+
+    module.exports = function (tagName, props, children) {
+        return new Element(tagName, props, children)
+    }
+
+    //步骤二 ：diff算法，对比差异，得到一个差异树对象，返回patches  diff.js
+
+    // diff 函数，对比两棵树
+    function diff(oldTree, newTree) {
+        var index = 0;  // 当前节点的标志
+        var patches = {};  // 在遍历过程中用来记录节点差异的对象
+        dfsWalk(oldTree, newTree, index, patches)  //深度优先遍历两棵树（多叉树结构的遍历算法）
+        return patches;
+    };
+
+    // 对两棵树进行深度优先遍历，每遍历到一个节点就把该节点和新的的树进行对比。如果有差异的话就记录到一个对象里面
+    function dfsWalk(oldNode, newNode, index, patches) {
+        var currentPatch = [];
+        if (newNode === null) {
+            //新Virtual DOM中不存在，直接将该节点在DOM中删除
+        } else if (util.isString(oldNode) && util.isString(newNode)) {
+            if (oldNode !== newNode) {
+                //如果是文本节点则直接替换文本
+                currentPatch.push({
+                    type: patch.TEXT,
+                    content: newNode
+                })
+            }
+        } else if (oldNode.tagName === newNode.tagName && oldNode.key === newNode.key) {
+            //节点类型相同
+            //比较节点的属性是否相同
+            var propsPatches = diffProps(oldNode, newNode);
+            if (propsPatches) {
+                currentPatch.push({
+                    type: patch.PROPS,
+                    props: propsPatches
+                })
+            }
+            //比较子节点是否相同
+            diffChildren(oldNode.children, newNode.children, index, patches, currentPatch)
+        } else {
+            //节点的类型不同，直接替换
+            currentPatch.push({
+                type: patch.REPLACE,
+                node: newNode
+            })
+        }
+        if (currentPatch.length) {
+            patches[index] = currentPatch
+        }
+    }
+
+    // 遍历子节点
+    function diffChildren(oldChildren, newChildren, index, patches) {
+        var leftNode = null
+        var currentNodeIndex = index
+        oldChildren.forEach(function (child, i) {
+            var newChild = newChildren[i]
+            currentNodeIndex = (leftNode && leftNode.count) // 计算节点的标识
+                ? currentNodeIndex + leftNode.count + 1
+                : currentNodeIndex + 1
+            dfsWalk(child, newChild, currentNodeIndex, patches) // 深度遍历子节点
+            leftNode = child
+        })
+    }
+
+    // 步骤三：渲染差异化：对真实DOM进行最小化修改patch.js
+
+    function patch(node, patches) {
+        var walker = { index: 0 }
+        dfsWalk(node, walker, patches)
+    }
+    //深度遍历DOM将Diff的内容更新进去
+    function dfsWalk(node, walker, patches) {
+        var currentPatches = patches[walker.index] // 从patches拿出当前节点的差异
+
+        var len = node.childNodes
+            ? node.childNodes.length
+            : 0
+        for (var i = 0; i < len; i++) { // 深度遍历子节点
+            var child = node.childNodes[i]
+            walker.index++
+            dfsWalk(child, walker, patches)
+        }
+        if (currentPatches) {
+            applyPatches(node, currentPatches) // 对当前节点进行DOM操作
+        }
+    }
+    //applyPatches，根据不同类型的差异对当前节点进行 DOM 操作
+    function applyPatches(node, currentPatches) {
+        currentPatches.forEach(function (currentPatch) {
+            switch (currentPatch.type) {
+                //当修改类型为REPLACE时
+                case REPLACE:
+                    node.parentNode.replaceChild(currentPatch.node.render(), node)
+                    break
+                //当修改类型为REORDER时
+                case REORDER:
+                    reorderChildren(node, currentPatch.moves)
+                    break
+                //当修改类型为PROPS时
+                case PROPS:
+                    setProps(node, currentPatch.props)
+                    break
+                //当修改类型为TEXT时
+                case TEXT:
+                    node.textContent = currentPatch.content
+                    break
+                default:
+                    throw new Error('Unknown patch type ' + currentPatch.type)
+            }
+        })
+    }
+// 节点差异归结为4种类型
+// 修改节点属性，用PROPS表示  例如：{type:PROPS,props: newProps}
+// 修改节点文本内容，用TEXT表示
+// 替换原有节点，用REPLACE表示  例如：{type:REPLACE,node:newNode}
+// 调整子节点，包括移动、删除等，用REORDER表示
+</script>
+<script>
+    // 1. 构建虚拟DOM
+    var tree = el('div', { 'id': 'container' }, [
+        el('h1', { style: 'color: blue' }, ['simple virtal dom']),
+        el('p', ['Hello, virtual-dom']),
+        el('ul', [el('li')])
+    ])
+
+    // 2. 通过虚拟DOM构建真正的DOM
+    var root = tree.render()
+    document.body.appendChild(root)
+
+    // 3. 生成新的虚拟DOM
+    var newTree = el('div', { 'id': 'container' }, [
+        el('h1', { style: 'color: red' }, ['simple virtal dom']),
+        el('p', ['Hello, virtual-dom']),
+        el('ul', [el('li'), el('li')])
+    ])
+
+    // 4. 比较两棵虚拟DOM树的不同
+    var patches = diff(tree, newTree)
+
+    // 5. 在真正的DOM元素上应用变更
+    patch(root, patches)
+</script>
+
+</html>
